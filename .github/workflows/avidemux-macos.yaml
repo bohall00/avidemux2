@@ -163,16 +163,16 @@ jobs:
           path: /Volumes/AvidemuxBuild/avidemux2
           key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
 
-      - name: Resolve bare library references
+      - name: Resolve library references
         run: |
           set -eu
           APP=$(find "$ADM_DIR" -maxdepth 1 -name 'Avidemux*.app' | head -1)
           find "$APP/Contents" -type f -print0 | while IFS= read -r -d '' f; do
             otool -L "$f" 2>/dev/null | awk 'NR>1 {print $1}' | while read -r dep; do
-              case "$dep" in /*|@*) continue ;; esac
-              if [ -f "$DEPS/lib/$dep" ]; then
-                echo "fixing $dep -> $DEPS/lib/$dep in $f"
-                install_name_tool -change "$dep" "$DEPS/lib/$dep" "$f"
+              case "$dep" in /*|@executable_path/*|@loader_path/*) continue ;; esac
+              name=${dep#@rpath/}
+              if [ -f "$DEPS/lib/$name" ]; then
+                install_name_tool -change "$dep" "$DEPS/lib/$name" "$f"
               fi
             done
           done
