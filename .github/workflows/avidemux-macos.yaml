@@ -7,10 +7,11 @@ jobs:
     env:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
       DEPS: ${{ github.workspace }}/deps
+      QTDIR: ${{ github.workspace }}/Qt/5.15.2/clang_64
       PKG_CONFIG_PATH: ${{ github.workspace }}/deps/lib/pkgconfig:${{ github.workspace }}/deps/share/pkgconfig
       CMAKE_PREFIX_PATH: ${{ github.workspace }}/deps
-      DEPS_CACHE_REV: "1"   # bump only when dependency versions/flags change
-      ADM_BUILD_REV: "1"    # bump only when the Avidemux build commands change
+      DEPS_CACHE_REV: "2"
+      ADM_BUILD_REV: "1"
     steps:
       - name: Install build tools
         run: brew install nasm yasm pkg-config meson ninja
@@ -22,60 +23,95 @@ jobs:
           path: |
             ${{ env.DEPS }}
             ${{ github.workspace }}/Qt
-          key: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+          key: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Build dependencies (all targeting 10.15)
+      - name: Install Qt 5.15.2 (official binaries, macOS 10.13+)
+        run: |
+          set -eu
+          if [ ! -x "$QTDIR/bin/qmake" ]; then
+            pipx install aqtinstall
+            aqt install-qt mac desktop 5.15.2 clang_64 -O "${{ github.workspace }}/Qt"
+          fi
+
+      - name: Build dependencies (resumable, all targeting 10.15)
         id: build-deps
-        if: steps.cache-deps.outputs.cache-hit != 'true'
         run: |
           set -eux
           mkdir -p src "$DEPS"; cd src
           J=$(sysctl -n hw.ncpu)
-          curl -fsSL https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz | tar xf -
-          (cd freetype-2.13.3 && ./configure --prefix="$DEPS" --enable-shared --disable-static --without-harfbuzz --without-brotli --without-bzip2 --without-png && make -j$J && make install)
-          curl -fsSL https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz | tar xf -
-          (cd fribidi-1.0.16 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
-          curl -fsSL https://github.com/harfbuzz/harfbuzz/releases/download/10.1.0/harfbuzz-10.1.0.tar.xz | tar xf -
-          meson setup hb-build harfbuzz-10.1.0 --prefix="$DEPS" -Ddefault_library=shared -Dfreetype=enabled -Dglib=disabled -Dicu=disabled -Dcairo=disabled -Dgobject=disabled -Dtests=disabled -Ddocs=disabled -Dbenchmark=disabled
-          ninja -C hb-build install
-          curl -fsSL https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.xz | tar xf -
-          (cd expat-2.6.4 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
-          curl -fsSL https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz | tar xf -
-          (cd fontconfig-2.15.0 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-docs && make -j$J && make install)
-          curl -fsSL https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.xz | tar xf -
-          (cd libass-0.17.3 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
-          curl -fsSL https://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz | tar xf -
-          (cd lame-3.100 && find . -name '*.sym' -exec sed -i '' '/lame_init_old/d' {} + && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-frontend && make -j$J && make install)
-          curl -fsSL https://github.com/xiph/opus/releases/download/v1.5.2/opus-1.5.2.tar.gz | tar xf -
-          (cd opus-1.5.2 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-doc --disable-extra-programs && make -j$J && make install)
-          curl -fsSL https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.gz | tar xf -
-          (cd xvidcore/build/generic && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
-          git clone --depth 1 https://code.videolan.org/videolan/x264.git
-          (cd x264 && ./configure --prefix="$DEPS" --enable-shared --enable-pic --disable-cli --disable-opencl && make -j$J && make install)
-          curl -fsSL https://github.com/webmproject/libvpx/archive/refs/tags/v1.15.0.tar.gz | tar xf -
-          (cd libvpx-1.15.0 && ./configure --prefix="$DEPS" --enable-shared --disable-static --enable-pic --disable-examples --disable-tools --disable-unit-tests --disable-docs && make -j$J && make install)
-          curl -fsSL https://storage.googleapis.com/aom-releases/libaom-3.11.0.tar.gz | tar xf -
-          cmake -S libaom-3.11.0 -B aom-build -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF -DENABLE_DOCS=OFF
-          cmake --build aom-build -j$J && cmake --install aom-build
-          curl -fsSL https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz | tar xf -
-          cmake -S x265_4.1/source -B x265-build -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DENABLE_CLI=OFF
-          cmake --build x265-build -j$J && cmake --install x265-build
 
-      - name: Install Qt 5.15.2 (official binaries, macOS 10.13+)
-        id: install-qt
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: |
-          pipx install aqtinstall
-          aqt install-qt mac desktop 5.15.2 clang_64 -O "${{ github.workspace }}/Qt"
+          build_freetype() {
+            curl -fsSL https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz | tar xf -
+            (cd freetype-2.13.3 && ./configure --prefix="$DEPS" --enable-shared --disable-static --without-harfbuzz --without-brotli --without-bzip2 --without-png && make -j$J && make install)
+          }
+          build_fribidi() {
+            curl -fsSL https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz | tar xf -
+            (cd fribidi-1.0.16 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          }
+          build_harfbuzz() {
+            curl -fsSL https://github.com/harfbuzz/harfbuzz/releases/download/10.1.0/harfbuzz-10.1.0.tar.xz | tar xf -
+            meson setup hb-build harfbuzz-10.1.0 --prefix="$DEPS" -Ddefault_library=shared -Dfreetype=enabled -Dglib=disabled -Dicu=disabled -Dcairo=disabled -Dgobject=disabled -Dtests=disabled -Ddocs=disabled -Dbenchmark=disabled
+            ninja -C hb-build install
+          }
+          build_expat() {
+            curl -fsSL https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.xz | tar xf -
+            (cd expat-2.6.4 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          }
+          build_fontconfig() {
+            curl -fsSL https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz | tar xf -
+            (cd fontconfig-2.15.0 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-docs && make -j$J && make install)
+          }
+          build_libass() {
+            curl -fsSL https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.xz | tar xf -
+            (cd libass-0.17.3 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          }
+          build_lame() {
+            curl -fsSL https://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz | tar xf -
+            (cd lame-3.100 && find . -name '*.sym' -exec sed -i '' '/lame_init_old/d' {} + && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-frontend && make -j$J && make install)
+          }
+          build_opus() {
+            curl -fsSL https://github.com/xiph/opus/releases/download/v1.5.2/opus-1.5.2.tar.gz | tar xf -
+            (cd opus-1.5.2 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-doc --disable-extra-programs && make -j$J && make install)
+          }
+          build_xvid() {
+            curl -fsSL https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.gz | tar xf -
+            (cd xvidcore/build/generic && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          }
+          build_x264() {
+            git clone --depth 1 https://code.videolan.org/videolan/x264.git
+            (cd x264 && ./configure --prefix="$DEPS" --enable-shared --enable-pic --disable-cli --disable-opencl && make -j$J && make install)
+          }
+          build_vpx() {
+            curl -fsSL https://github.com/webmproject/libvpx/archive/refs/tags/v1.15.0.tar.gz | tar xf -
+            (cd libvpx-1.15.0 && CC=clang ./configure --target=x86_64-darwin19-gcc --prefix="$DEPS" --enable-shared --disable-static --enable-pic --disable-examples --disable-tools --disable-unit-tests --disable-docs && make -j$J && make install)
+          }
+          build_aom() {
+            curl -fsSL https://storage.googleapis.com/aom-releases/libaom-3.11.0.tar.gz | tar xf -
+            cmake -S libaom-3.11.0 -B aom-build -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF -DENABLE_DOCS=OFF
+            cmake --build aom-build -j$J && cmake --install aom-build
+          }
+          build_x265() {
+            curl -fsSL https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz | tar xf -
+            cmake -S x265_4.1/source -B x265-build -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DENABLE_CLI=OFF
+            cmake --build x265-build -j$J && cmake --install x265-build
+          }
+
+          for lib in freetype fribidi harfbuzz expat fontconfig libass lame opus xvid x264 vpx aom x265; do
+            if [ -e "$DEPS/.ok-$lib" ]; then echo "### $lib: already built, skipping"; continue; fi
+            echo "### building $lib"
+            build_$lib
+            touch "$DEPS/.ok-$lib"
+          done
 
       - name: Save dependency cache
-        if: always() && steps.cache-deps.outputs.cache-hit != 'true' && steps.build-deps.outcome == 'success' && steps.install-qt.outcome == 'success'
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: |
             ${{ env.DEPS }}
             ${{ github.workspace }}/Qt
-          key: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+          key: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
 
       - name: Get upstream commit
         id: upstream
@@ -86,7 +122,8 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ github.workspace }}/avidemux2
-          key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+          key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
+          restore-keys: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Build Avidemux
         id: build-adm
@@ -101,23 +138,22 @@ jobs:
             -e 's|/cmake/osx/|/avidemux/qt4/cmake/osx/|g' \
             -e 's|${QTDIR}/share/qt/plugins|${QTDIR}/plugins|g' \
             bootStrapOsx_Catalina.bash
-          export MYQT="${{ github.workspace }}/Qt/5.15.2/clang_64"
+          export MYQT="$QTDIR"
           bash bootStrapOsx_Catalina.bash --nopkg --rebuild --with-internal-liba52 --with-internal-libmp4v2
 
       - name: Save Avidemux build cache
-        if: always() && steps.cache-adm.outputs.cache-hit != 'true' && steps.build-adm.outcome == 'success'
+        if: always()
         uses: actions/cache/save@v4
         with:
           path: ${{ github.workspace }}/avidemux2
-          key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+          key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
 
       - name: Package DMG
         id: package
         run: |
           set -eux
           cd avidemux2
-          export MYQT="${{ github.workspace }}/Qt/5.15.2/clang_64"
-          export QTDIR="$MYQT"
+          export MYQT="$QTDIR"
           export PATH="$QTDIR/bin:$PATH"
           V=$(awk -F'"' '/CPACK_PACKAGE_VERSION_MAJOR /{M=$2} /CPACK_PACKAGE_VERSION_MINOR /{m=$2} /CPACK_PACKAGE_VERSION_P /{p=$2} END{print M"."m"."p}' avidemux_core/cmake/avidemuxVersion.cmake)
           MM=$(awk -F'"' '/CPACK_PACKAGE_VERSION_MAJOR /{M=$2} /CPACK_PACKAGE_VERSION_MINOR /{m=$2} END{print M"."m}' avidemux_core/cmake/avidemuxVersion.cmake)
