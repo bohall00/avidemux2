@@ -16,6 +16,12 @@ jobs:
       - name: Install build tools
         run: brew install nasm yasm pkg-config meson ninja
 
+      - name: Install CMake 3.31.6
+        run: |
+          set -eu
+          curl -fsSL https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-macos-universal.tar.gz | tar xf -
+          echo "$PWD/cmake-3.31.6-macos-universal/CMake.app/Contents/bin" >> "$GITHUB_PATH"
+
       - name: Restore dependency cache
         id: cache-deps
         uses: actions/cache/restore@v4
