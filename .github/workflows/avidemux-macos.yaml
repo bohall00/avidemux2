@@ -8,10 +8,11 @@ jobs:
       MACOSX_DEPLOYMENT_TARGET: "10.15"
       DEPS: ${{ github.workspace }}/deps
       QTDIR: ${{ github.workspace }}/Qt/5.15.2/clang_64
+      ADM_DIR: /Volumes/AvidemuxBuild/avidemux2
       PKG_CONFIG_PATH: ${{ github.workspace }}/deps/lib/pkgconfig:${{ github.workspace }}/deps/share/pkgconfig
       CMAKE_PREFIX_PATH: ${{ github.workspace }}/deps
       DEPS_CACHE_REV: "2"
-      ADM_BUILD_REV: "1"
+      ADM_BUILD_REV: "2"
     steps:
       - name: Install build tools
         run: brew install nasm yasm pkg-config meson ninja
@@ -119,6 +120,13 @@ jobs:
             ${{ github.workspace }}/Qt
           key: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
 
+      - name: Create case-sensitive build volume
+        run: |
+          set -eu
+          hdiutil create -size 30g -type SPARSE -fs "Case-sensitive APFS" -volname AvidemuxBuild "$RUNNER_TEMP/AvidemuxBuild.sparseimage"
+          hdiutil attach "$RUNNER_TEMP/AvidemuxBuild.sparseimage"
+          sudo chown "$(id -un)" /Volumes/AvidemuxBuild
+
       - name: Get upstream commit
         id: upstream
         run: echo "sha=$(git ls-remote https://github.com/mean00/avidemux2.git HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
@@ -127,7 +135,7 @@ jobs:
         id: cache-adm
         uses: actions/cache/restore@v4
         with:
-          path: ${{ github.workspace }}/avidemux2
+          path: /Volumes/AvidemuxBuild/avidemux2
           key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
           restore-keys: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-
 
@@ -135,6 +143,7 @@ jobs:
         id: build-adm
         run: |
           set -eux
+          cd /Volumes/AvidemuxBuild
           if [ ! -d avidemux2/.git ]; then
             git clone --recursive https://github.com/mean00/avidemux2.git
           fi
@@ -151,14 +160,14 @@ jobs:
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: ${{ github.workspace }}/avidemux2
+          path: /Volumes/AvidemuxBuild/avidemux2
           key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}-${{ github.run_id }}
 
       - name: Package DMG
         id: package
         run: |
           set -eux
-          cd avidemux2
+          cd "$ADM_DIR"
           export MYQT="$QTDIR"
           export PATH="$QTDIR/bin:$PATH"
           V=$(awk -F'"' '/CPACK_PACKAGE_VERSION_MAJOR /{M=$2} /CPACK_PACKAGE_VERSION_MINOR /{m=$2} /CPACK_PACKAGE_VERSION_P /{p=$2} END{print M"."m"."p}' avidemux_core/cmake/avidemuxVersion.cmake)
@@ -170,7 +179,7 @@ jobs:
       - name: Verify the app is self-contained
         run: |
           set -eu
-          APP=$(find avidemux2/installer -maxdepth 1 -name '*.app' | head -1)
+          APP=$(find "$ADM_DIR/installer" -maxdepth 1 -name '*.app' | head -1)
           leaks=$(find "$APP/Contents" -type f -print0 \
             | xargs -0 -I{} sh -c 'otool -L "{}" 2>/dev/null' \
             | grep -E "$DEPS|/Qt/5\.15\.2|/usr/local/|/opt/homebrew" || true)
@@ -181,4 +190,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: avidemux-macos-catalina
-          path: avidemux2/installer/*.dmg
+          path: /Volumes/AvidemuxBuild/avidemux2/installer/*.dmg
