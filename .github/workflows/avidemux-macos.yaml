@@ -45,7 +45,7 @@ jobs:
           curl -fsSL https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.xz | tar xf -
           (cd libass-0.17.3 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
           curl -fsSL https://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz | tar xf -
-          (cd lame-3.100 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-frontend && make -j$J && make install)
+          (cd lame-3.100 && find . -name '*.sym' -exec sed -i '' '/lame_init_old/d' {} + && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-frontend && make -j$J && make install)
           curl -fsSL https://github.com/xiph/opus/releases/download/v1.5.2/opus-1.5.2.tar.gz | tar xf -
           (cd opus-1.5.2 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-doc --disable-extra-programs && make -j$J && make install)
           curl -fsSL https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.gz | tar xf -
