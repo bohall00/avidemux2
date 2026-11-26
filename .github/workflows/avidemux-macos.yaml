@@ -1,0 +1,142 @@
+name: Avidemux macOS (Catalina)
+on: [workflow_dispatch, push]
+
+jobs:
+  build:
+    runs-on: macos-15-intel
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "10.15"
+      DEPS: ${{ github.workspace }}/deps
+      PKG_CONFIG_PATH: ${{ github.workspace }}/deps/lib/pkgconfig:${{ github.workspace }}/deps/share/pkgconfig
+      CMAKE_PREFIX_PATH: ${{ github.workspace }}/deps
+      DEPS_CACHE_REV: "1"   # bump only when dependency versions/flags change
+      ADM_BUILD_REV: "1"    # bump only when the Avidemux build commands change
+    steps:
+      - name: Install build tools
+        run: brew install nasm yasm pkg-config meson ninja
+
+      - name: Restore dependency cache
+        id: cache-deps
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ env.DEPS }}
+            ${{ github.workspace }}/Qt
+          key: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build dependencies (all targeting 10.15)
+        id: build-deps
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          set -eux
+          mkdir -p src "$DEPS"; cd src
+          J=$(sysctl -n hw.ncpu)
+          curl -fsSL https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz | tar xf -
+          (cd freetype-2.13.3 && ./configure --prefix="$DEPS" --enable-shared --disable-static --without-harfbuzz --without-brotli --without-bzip2 --without-png && make -j$J && make install)
+          curl -fsSL https://github.com/fribidi/fribidi/releases/download/v1.0.16/fribidi-1.0.16.tar.xz | tar xf -
+          (cd fribidi-1.0.16 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          curl -fsSL https://github.com/harfbuzz/harfbuzz/releases/download/10.1.0/harfbuzz-10.1.0.tar.xz | tar xf -
+          meson setup hb-build harfbuzz-10.1.0 --prefix="$DEPS" -Ddefault_library=shared -Dfreetype=enabled -Dglib=disabled -Dicu=disabled -Dcairo=disabled -Dgobject=disabled -Dtests=disabled -Ddocs=disabled -Dbenchmark=disabled
+          ninja -C hb-build install
+          curl -fsSL https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.xz | tar xf -
+          (cd expat-2.6.4 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          curl -fsSL https://www.freedesktop.org/software/fontconfig/release/fontconfig-2.15.0.tar.xz | tar xf -
+          (cd fontconfig-2.15.0 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-docs && make -j$J && make install)
+          curl -fsSL https://github.com/libass/libass/releases/download/0.17.3/libass-0.17.3.tar.xz | tar xf -
+          (cd libass-0.17.3 && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          curl -fsSL https://deb.debian.org/debian/pool/main/l/lame/lame_3.100.orig.tar.gz | tar xf -
+          (cd lame-3.100 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-frontend && make -j$J && make install)
+          curl -fsSL https://github.com/xiph/opus/releases/download/v1.5.2/opus-1.5.2.tar.gz | tar xf -
+          (cd opus-1.5.2 && ./configure --prefix="$DEPS" --enable-shared --disable-static --disable-doc --disable-extra-programs && make -j$J && make install)
+          curl -fsSL https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.gz | tar xf -
+          (cd xvidcore/build/generic && ./configure --prefix="$DEPS" --enable-shared --disable-static && make -j$J && make install)
+          git clone --depth 1 https://code.videolan.org/videolan/x264.git
+          (cd x264 && ./configure --prefix="$DEPS" --enable-shared --enable-pic --disable-cli --disable-opencl && make -j$J && make install)
+          curl -fsSL https://github.com/webmproject/libvpx/archive/refs/tags/v1.15.0.tar.gz | tar xf -
+          (cd libvpx-1.15.0 && ./configure --prefix="$DEPS" --enable-shared --disable-static --enable-pic --disable-examples --disable-tools --disable-unit-tests --disable-docs && make -j$J && make install)
+          curl -fsSL https://storage.googleapis.com/aom-releases/libaom-3.11.0.tar.gz | tar xf -
+          cmake -S libaom-3.11.0 -B aom-build -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF -DENABLE_DOCS=OFF
+          cmake --build aom-build -j$J && cmake --install aom-build
+          curl -fsSL https://bitbucket.org/multicoreware/x265_git/downloads/x265_4.1.tar.gz | tar xf -
+          cmake -S x265_4.1/source -B x265-build -DCMAKE_INSTALL_PREFIX="$DEPS" -DCMAKE_BUILD_TYPE=Release -DENABLE_SHARED=ON -DENABLE_STATIC=OFF -DENABLE_CLI=OFF
+          cmake --build x265-build -j$J && cmake --install x265-build
+
+      - name: Install Qt 5.15.2 (official binaries, macOS 10.13+)
+        id: install-qt
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: |
+          pipx install aqtinstall
+          aqt install-qt mac desktop 5.15.2 clang_64 -O "${{ github.workspace }}/Qt"
+
+      - name: Save dependency cache
+        if: always() && steps.cache-deps.outputs.cache-hit != 'true' && steps.build-deps.outcome == 'success' && steps.install-qt.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ env.DEPS }}
+            ${{ github.workspace }}/Qt
+          key: avidemux-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Get upstream commit
+        id: upstream
+        run: echo "sha=$(git ls-remote https://github.com/mean00/avidemux2.git HEAD | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Avidemux build cache
+        id: cache-adm
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ github.workspace }}/avidemux2
+          key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Build Avidemux
+        id: build-adm
+        run: |
+          set -eux
+          if [ ! -d avidemux2/.git ]; then
+            git clone --recursive https://github.com/mean00/avidemux2.git
+          fi
+          cd avidemux2
+          sed -i '' \
+            -e 's|cat cmake/avidemuxVersion.cmake|cat avidemux_core/cmake/avidemuxVersion.cmake|g' \
+            -e 's|/cmake/osx/|/avidemux/qt4/cmake/osx/|g' \
+            -e 's|${QTDIR}/share/qt/plugins|${QTDIR}/plugins|g' \
+            bootStrapOsx_Catalina.bash
+          export MYQT="${{ github.workspace }}/Qt/5.15.2/clang_64"
+          bash bootStrapOsx_Catalina.bash --nopkg --rebuild --with-internal-liba52 --with-internal-libmp4v2
+
+      - name: Save Avidemux build cache
+        if: always() && steps.cache-adm.outputs.cache-hit != 'true' && steps.build-adm.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ github.workspace }}/avidemux2
+          key: avidemux-build-${{ steps.upstream.outputs.sha }}-r${{ env.ADM_BUILD_REV }}-deps-r${{ env.DEPS_CACHE_REV }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Package DMG
+        id: package
+        run: |
+          set -eux
+          cd avidemux2
+          export MYQT="${{ github.workspace }}/Qt/5.15.2/clang_64"
+          export QTDIR="$MYQT"
+          export PATH="$QTDIR/bin:$PATH"
+          V=$(awk -F'"' '/CPACK_PACKAGE_VERSION_MAJOR /{M=$2} /CPACK_PACKAGE_VERSION_MINOR /{m=$2} /CPACK_PACKAGE_VERSION_P /{p=$2} END{print M"."m"."p}' avidemux_core/cmake/avidemuxVersion.cmake)
+          MM=$(awk -F'"' '/CPACK_PACKAGE_VERSION_MAJOR /{M=$2} /CPACK_PACKAGE_VERSION_MINOR /{m=$2} END{print M"."m}' avidemux_core/cmake/avidemuxVersion.cmake)
+          rm -rf installer; mkdir installer; cd installer
+          cmake -DAVIDEMUX_VERSION="$V" -DAVIDEMUX_MAJOR_MINOR="$MM" -DENABLE_QT5=True ../avidemux/osxInstaller
+          make package
+
+      - name: Verify the app is self-contained
+        run: |
+          set -eu
+          APP=$(find avidemux2/installer -maxdepth 1 -name '*.app' | head -1)
+          leaks=$(find "$APP/Contents" -type f -print0 \
+            | xargs -0 -I{} sh -c 'otool -L "{}" 2>/dev/null' \
+            | grep -E "$DEPS|/Qt/5\.15\.2|/usr/local/|/opt/homebrew" || true)
+          if [ -n "$leaks" ]; then echo "Unbundled references:"; echo "$leaks"; exit 1; fi
+          echo "OK: app is self-contained"
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: avidemux-macos-catalina
+          path: avidemux2/installer/*.dmg
